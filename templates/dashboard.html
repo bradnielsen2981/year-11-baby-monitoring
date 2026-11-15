@@ -1,0 +1,59 @@
+{% extends "layout.html" %}
+
+{% block title %}Dashboard - Baby Monitoring{% endblock %}
+
+{% block head %}
+<link href="{{ url_for('static', filename='css/dashboard.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-baseline mb-4">
+    <h1 class="h3 mb-0"><i class="fa-solid fa-gauge me-2"></i>Dashboard</h1>
+    <small class="text-muted" id="last-reading">
+        {% if latest %}Last reading: {{ latest.time }}{% else %}No readings yet{% endif %}
+    </small>
+</div>
+
+<!-- Gauges: the most recent reading from each sensor -->
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card h-100 text-center">
+            <div class="card-header"><i class="fa-solid fa-temperature-half me-1"></i>Temperature (°C)</div>
+            <div class="card-body"><div id="gauge-temp" class="gauge"></div></div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 text-center">
+            <div class="card-header"><i class="fa-solid fa-droplet me-1"></i>Humidity (%)</div>
+            <div class="card-body"><div id="gauge-hum" class="gauge"></div></div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 text-center">
+            <div class="card-header"><i class="fa-solid fa-ruler-vertical me-1"></i>Distance (cm)</div>
+            <div class="card-body"><div id="gauge-distance" class="gauge"></div></div>
+        </div>
+    </div>
+</div>
+
+<!-- Line graphs: one per sensor, over time -->
+<div class="card mb-3">
+    <div class="card-header"><i class="fa-solid fa-temperature-half me-1"></i>Temperature over time (°C)</div>
+    <div class="card-body"><div id="line-temp" class="line-chart"></div></div>
+</div>
+<div class="card mb-3">
+    <div class="card-header"><i class="fa-solid fa-droplet me-1"></i>Humidity over time (%)</div>
+    <div class="card-body"><div id="line-hum" class="line-chart"></div></div>
+</div>
+<div class="card mb-3">
+    <div class="card-header"><i class="fa-solid fa-ruler-vertical me-1"></i>Distance over time (cm)</div>
+    <div class="card-body"><div id="line-distance" class="line-chart"></div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Data from Flask, rendered into the page when it loads -->
+<script id="sensor-data" type="application/json" data-api-url="{{ url_for('api_sensordata') }}">{{ {"latest": latest, "history": history} | tojson }}</script>
+<script src="https://www.gstatic.com/charts/loader.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}
