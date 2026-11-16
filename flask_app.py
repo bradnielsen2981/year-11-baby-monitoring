@@ -1,5 +1,6 @@
 
 import hashlib
+import hmac
 import os
 from functools import wraps
 
@@ -48,22 +49,39 @@ DATABASE.ModifyQuery("""
     )
 """)
 
+# pbkdf2:sha256 works on every Werkzeug version. (Werkzeug 3 defaults to scrypt, which older
+# Werkzeug versions - such as the one on PythonAnywhere - cannot check.)
+PASSWORD_METHOD = 'pbkdf2:sha256'
+
+
+def hash_password(password):
+    return generate_password_hash(password, method=PASSWORD_METHOD)
+
+
 # Add the default admin user (password 'admin', stored as a hash) if it doesn't exist yet
 if not DATABASE.ViewQuery("SELECT userid FROM users WHERE email = ?", ('admin@admin',)):
     DATABASE.ModifyQuery(
         "INSERT INTO users (firstname, lastname, password, email, permission) VALUES (?, ?, ?, ?, ?)",
-        ('Admin', 'User', generate_password_hash('admin'), 'admin@admin', 'admin')
+        ('Admin', 'User', hash_password('admin'), 'admin@admin', 'admin')
     )
 
 
 def check_password(stored_hash, password):
-    """Check a password against a stored hash.
-    Supports Werkzeug hashes and the older 'sha256hex:salt' format used by earlier versions of this database."""
+    """Check a password against a stored hash. Supports:
+    - Werkzeug pbkdf2 hashes:  'pbkdf2:sha256:600000$salt$hash'
+    - Werkzeug 3 scrypt hashes: 'scrypt:32768:8:1$salt$hash' (checked here with hashlib, so old Werkzeug works)
+    - the older 'sha256hex:salt' format used by earlier versions of this database"""
+    if stored_hash.startswith('scrypt:'):
+        method, salt, expected = stored_hash.split('$', 2)
+        n, r, p = (int(x) for x in method.split(':')[1:4])
+        actual = hashlib.scrypt(password.encode(), salt=salt.encode(), n=n, r=r, p=p,
+                                maxmem=132 * n * r * p).hex()
+        return hmac.compare_digest(actual, expected)
     if '$' in stored_hash:
         return check_password_hash(stored_hash, password)
     if ':' in stored_hash:
         digest, salt = stored_hash.split(':', 1)
-        return hashlib.sha256((salt + password).encode()).hexdigest() == digest
+        return hmac.compare_digest(hashlib.sha256((salt + password).encode()).hexdigest(), digest)
     return False
 
 
@@ -86,10 +104,10 @@ def login():
         # Compare the typed password against the stored hash
         if users and check_password(users[0]['password'], password):
             user = users[0]
-            # Upgrade old-style hashes to Werkzeug hashes and record the login time
-            if '$' not in user['password']:
+            # Upgrade any other hash type (old sha256 or scrypt) to pbkdf2, and record the login time
+            if not user['password'].startswith('pbkdf2:'):
                 DATABASE.ModifyQuery("UPDATE users SET password = ? WHERE userid = ?",
-                                     (generate_password_hash(password), user['userid']))
+                                     (hash_password(password), user['userid']))
             DATABASE.ModifyQuery("UPDATE users SET lastaccess = datetime('now', 'localtime') WHERE userid = ?",
                                  (user['userid'],))
             session.clear()
