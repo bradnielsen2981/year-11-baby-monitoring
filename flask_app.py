@@ -183,6 +183,24 @@ def api_sensordata():
     return jsonify({"latest": latest, "history": history})
 
 
+@app.route('/test_database')
+@login_required
+def test_database():
+    """Output every table in the database as JSON: {"tablename": [row, row, ...], ...}.
+    Admin only, because the users table includes password hashes and tokens."""
+    if session.get('permission') != 'admin':
+        return jsonify({"error": "Admin permission required"}), 403
+    tables = DATABASE.ViewQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    )
+    data = {}
+    for table in tables:
+        name = table['name']
+        # Table names can't be passed as ? parameters, so quote the name (it comes from sqlite_master, not the user)
+        data[name] = DATABASE.ViewQuery('SELECT * FROM "{}"'.format(name.replace('"', '""')))
+    return jsonify(data)
+
+
 @app.route('/uploadsensordata', methods=['GET', 'POST', 'OPTIONS'])
 def uploadsensordata():
     message = "Failure"
