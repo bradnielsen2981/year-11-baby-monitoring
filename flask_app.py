@@ -2,6 +2,9 @@
 import hashlib
 import hmac
 import os
+import re
+from contextlib import closing
+from datetime import datetime
 from functools import wraps
 
 from flask import Flask, request, jsonify, render_template, redirect, url_for, session, flash
@@ -26,12 +29,39 @@ DATABASE = Database(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ba
 DATABASE.ModifyQuery("""
     CREATE TABLE IF NOT EXISTS history (
         historyid INTEGER PRIMARY KEY AUTOINCREMENT,
+        bassinetid TEXT NOT NULL,
         temp REAL NOT NULL,
         hum REAL NOT NULL,
         distance REAL NOT NULL,
         time TEXT NOT NULL
     )
 """)
+
+# Bassinet IDs are 8 digit hexadecimal numbers, e.g. '3F9A2C71' - one per Raspberry Pi
+BASSINET_ID_PATTERN = re.compile(r'^[0-9A-F]{8}$')
+
+# Older databases stored bassinetid as an INTEGER (or not at all). Rebuild the table with a TEXT column,
+# so IDs like '00001234' keep their leading zeros. Existing rows (the dummy data) get this bassinet ID.
+LEGACY_BASSINET_ID = '3F9A2C71'
+history_columns = {col['name']: col['type'].upper() for col in DATABASE.ViewQuery("PRAGMA table_info(history)")}
+if history_columns.get('bassinetid') != 'TEXT':
+    with closing(DATABASE.connect()) as connection:
+        connection.executescript(f"""
+            BEGIN;
+            CREATE TABLE history_new (
+                historyid INTEGER PRIMARY KEY AUTOINCREMENT,
+                bassinetid TEXT NOT NULL,
+                temp REAL NOT NULL,
+                hum REAL NOT NULL,
+                distance REAL NOT NULL,
+                time TEXT NOT NULL
+            );
+            INSERT INTO history_new (historyid, bassinetid, temp, hum, distance, time)
+                SELECT historyid, '{LEGACY_BASSINET_ID}', temp, hum, distance, time FROM history;
+            DROP TABLE history;
+            ALTER TABLE history_new RENAME TO history;
+            COMMIT;
+        """)
 
 # Create the users table the first time the app runs (matches the existing babymonitoring.db table)
 DATABASE.ModifyQuery("""
@@ -130,7 +160,7 @@ def logout():
 def get_sensor_data(limit=60):
     """Return the most recent reading and the last `limit` readings (oldest first) from the history table."""
     rows = DATABASE.ViewQuery(
-        "SELECT historyid, temp, hum, distance, time FROM history ORDER BY time DESC, historyid DESC LIMIT ?",
+        "SELECT historyid, bassinetid, temp, hum, distance, time FROM history ORDER BY time DESC, historyid DESC LIMIT ?",
         (limit,)
     )
     rows.reverse()  # oldest first, so the line graphs read left to right
@@ -158,19 +188,31 @@ def uploadsensordata():
     message = "Failure"
     led = "off"
     if request.method == 'POST':
+        # Every reading must say which bassinet it came from: an 8 digit hexadecimal ID
+        bassinetid = request.form.get('bassinetid', '').strip().upper()
+        if not BASSINET_ID_PATTERN.match(bassinetid):
+            return jsonify({"result": "Failure", "led": led,
+                            "error": "bassinetid must be an 8 digit hexadecimal number"}), 400
         temp = float(request.form.get('temp'))
         hum = float(request.form.get('hum'))
         distance = float(request.form.get('distance'))
         name = request.form.get('name', 'Unknown')
+        # Use the timestamp sent by the Raspberry Pi ('YYYY-MM-DD HH:MM:SS'); if it's missing
+        # or in the wrong format, fall back to the server's time
+        timestamp = request.form.get('time', '')
+        try:
+            datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         # Log the individual values
         app.logger.info(
-            "Name: %s, Temperature: %s, Humidity: %s, Distance: %s",
-            name, temp, hum, distance
+            "Name: %s, Bassinet: %s, Time: %s, Temperature: %s, Humidity: %s, Distance: %s",
+            name, bassinetid, timestamp, temp, hum, distance
         )
         # Save the reading to the history table
         saved = DATABASE.ModifyQuery(
-            "INSERT INTO history (temp, hum, distance, time) VALUES (?, ?, ?, datetime('now', 'localtime'))",
-            (temp, hum, distance)
+            "INSERT INTO history (bassinetid, temp, hum, distance, time) VALUES (?, ?, ?, ?, ?)",
+            (bassinetid, temp, hum, distance, timestamp)
         )
         if saved:
             message = "Success"
