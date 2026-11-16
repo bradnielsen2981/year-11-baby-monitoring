@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify, render_template, redirect, url_for, s
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from databaseinterface import Database
+from interfaces.databaseinterface import Database
 
 app = Flask(__name__)
 
